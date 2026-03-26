@@ -1,0 +1,112 @@
+# ============================================================
+# Fantasy Baseball ROTO Daily Manager — Configuration
+# ============================================================
+# Copy this file to config.yaml and fill in your values.
+# NEVER commit config.yaml to version control.
+
+# ----------------------------------------------------------
+# Yahoo Fantasy API
+# ----------------------------------------------------------
+yahoo:
+  client_id: "YOUR_YAHOO_CLIENT_ID"
+  client_secret: "YOUR_YAHOO_CLIENT_SECRET"
+  league_id: "YOUR_LEAGUE_ID"          # e.g. "423.l.12345"
+  game_key: "mlb"                       # "mlb" auto-resolves to current season
+  token_file: ".yahoo_token.json"       # cached OAuth token
+
+# ----------------------------------------------------------
+# Google Drive
+# ----------------------------------------------------------
+google_drive:
+  service_account_file: "service_account.json"   # path to your JSON key
+  folder_id: "YOUR_GOOGLE_DRIVE_FOLDER_ID"       # shared folder for reports
+
+# ----------------------------------------------------------
+# ROTO League Categories
+# Customize to match YOUR league's scoring categories.
+# ----------------------------------------------------------
+roto_categories:
+  hitting:
+    - stat: "R"
+      name: "Runs"
+      higher_is_better: true
+    - stat: "HR"
+      name: "Home Runs"
+      higher_is_better: true
+    - stat: "RBI"
+      name: "Runs Batted In"
+      higher_is_better: true
+    - stat: "SB"
+      name: "Stolen Bases"
+      higher_is_better: true
+    - stat: "AVG"
+      name: "Batting Average"
+      higher_is_better: true
+      # Change to OBP if your league uses On-Base Percentage:
+      # - stat: "OBP"
+      #   name: "On-Base Percentage"
+      #   higher_is_better: true
+
+  pitching:
+    - stat: "W"
+      name: "Wins"
+      higher_is_better: true
+      # Change to QS if your league uses Quality Starts:
+      # - stat: "QS"
+      #   name: "Quality Starts"
+      #   higher_is_better: true
+    - stat: "K"
+      name: "Strikeouts"
+      higher_is_better: true
+    - stat: "ERA"
+      name: "Earned Run Average"
+      higher_is_better: false
+    - stat: "WHIP"
+      name: "Walks + Hits per IP"
+      higher_is_better: false
+    - stat: "SV"
+      name: "Saves"
+      higher_is_better: true
+
+# ----------------------------------------------------------
+# Analysis Thresholds
+# Tune these to control recommendation sensitivity.
+# ----------------------------------------------------------
+analysis:
+  # Only consider free agents owned in at least this % of leagues
+  min_ownership_pct: 5
+
+  # Number of recent days used to compute "hot streak" metrics
+  hot_streak_days: 14
+
+  # How many waiver suggestions to include per report
+  max_waiver_suggestions: 10
+
+  # How many trade targets to include per report
+  max_trade_suggestions: 5
+
+  # Minimum AB or IP to trust a player's recent stats
+  min_at_bats_recent: 20
+  min_innings_pitched_recent: 8.0
+
+  # Weight for recent performance vs. season-long (0.0–1.0)
+  # Higher = more emphasis on hot streaks
+  recency_weight: 0.6
+
+  # Positions to evaluate for start/sit (all by default)
+  roster_positions:
+    hitting: ["C", "1B", "2B", "3B", "SS", "LF", "CF", "RF", "OF", "Util", "BN"]
+    pitching: ["SP", "RP", "P", "BN"]
+
+# ----------------------------------------------------------
+# Report Settings
+# ----------------------------------------------------------
+report:
+  # Include a "why" explanation with each recommendation
+  include_explanations: true
+
+  # Language level: "beginner" adds extra context for new players
+  audience: "beginner"
+
+  # File naming pattern (date is auto-appended)
+  filename_prefix: "fantasy_daily_report"
