@@ -66,7 +66,7 @@ class ReportWriter:
     # ── Sections ────────────────────────────────────────────────────────
 
     def _header(self, report: DailyReport) -> str:
-        date_display = report.report_date.strftime("%A, %B %-d, %Y")
+        date_display = f"{d.strftime('%A')}, {d.strftime('%B')} {d.day}, {d.year}"
         league = report.league_name or "My League"
         return (
             f"# Fantasy Baseball Daily Report\n"

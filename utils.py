@@ -74,7 +74,8 @@ def today_str(fmt: str = "%Y-%m-%d") -> str:
     return today().strftime(fmt)
 
 def today_display() -> str:
-    return today().strftime("%A, %B %-d, %Y")
+    d = today()
+    return f"{d.strftime('%A')}, {d.strftime('%B')} {d.day}, {d.year}"
 
 def days_ago(n: int) -> date:
     return today() - timedelta(days=n)
