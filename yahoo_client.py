@@ -48,7 +48,7 @@ class YahooClient:
         league_id = self._cfg["league_id"]
 
         if "." not in league_id:
-            game_key = self._game.game_key()
+            game_key = self._game.game_id()
             league_id = f"{game_key}.l.{league_id}"
 
         self._league = self._game.to_league(league_id)
