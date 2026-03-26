@@ -15,15 +15,48 @@ yahoo:
   token_file: ".yahoo_token.json"       # cached OAuth token
 
 # ----------------------------------------------------------
-# Google Drive
+# Report Output
 # ----------------------------------------------------------
-google_drive:
-  service_account_file: "service_account.json"   # path to your JSON key
-  folder_id: "YOUR_GOOGLE_DRIVE_FOLDER_ID"       # shared folder for reports
+output:
+  # Local folder where the daily .md file is written.
+  # Point this at a Google Drive / Dropbox / OneDrive synced folder
+  # so you can read it from your phone.
+  directory: "~/Google Drive/Fantasy Baseball"
+
+  # "overwrite" = same file every day (daily_report.md)
+  # "dated"     = keep history (report_2026-04-15.md)
+  mode: "overwrite"
+  filename: "daily_report.md"           # used when mode is "overwrite"
 
 # ----------------------------------------------------------
-# ROTO League Categories
-# Customize to match YOUR league's scoring categories.
+# Roster Positions (your league's layout)
+# ----------------------------------------------------------
+roster_positions:
+  hitting:
+    - "C"
+    - "1B"
+    - "2B"
+    - "3B"
+    - "SS"
+    - "OF"
+    - "OF"
+    - "OF"
+    - "Util"
+    - "Util"
+  pitching:
+    - "SP"
+    - "SP"
+    - "RP"
+    - "RP"
+    - "P"
+    - "P"
+    - "P"
+    - "P"
+  bench: 4
+  injured: 3
+
+# ----------------------------------------------------------
+# ROTO League Categories (6x6)
 # ----------------------------------------------------------
 roto_categories:
   hitting:
@@ -39,24 +72,25 @@ roto_categories:
     - stat: "SB"
       name: "Stolen Bases"
       higher_is_better: true
-    - stat: "AVG"
-      name: "Batting Average"
+    - stat: "OBP"
+      name: "On-Base Percentage"
       higher_is_better: true
-      # Change to OBP if your league uses On-Base Percentage:
-      # - stat: "OBP"
-      #   name: "On-Base Percentage"
-      #   higher_is_better: true
+    - stat: "OPS"
+      name: "OBP + Slugging"
+      higher_is_better: true
 
   pitching:
     - stat: "W"
       name: "Wins"
       higher_is_better: true
-      # Change to QS if your league uses Quality Starts:
-      # - stat: "QS"
-      #   name: "Quality Starts"
-      #   higher_is_better: true
+    - stat: "SV"
+      name: "Saves"
+      higher_is_better: true
     - stat: "K"
       name: "Strikeouts"
+      higher_is_better: true
+    - stat: "HLD"
+      name: "Holds"
       higher_is_better: true
     - stat: "ERA"
       name: "Earned Run Average"
@@ -64,49 +98,22 @@ roto_categories:
     - stat: "WHIP"
       name: "Walks + Hits per IP"
       higher_is_better: false
-    - stat: "SV"
-      name: "Saves"
-      higher_is_better: true
 
 # ----------------------------------------------------------
 # Analysis Thresholds
-# Tune these to control recommendation sensitivity.
 # ----------------------------------------------------------
 analysis:
-  # Only consider free agents owned in at least this % of leagues
   min_ownership_pct: 5
-
-  # Number of recent days used to compute "hot streak" metrics
   hot_streak_days: 14
-
-  # How many waiver suggestions to include per report
   max_waiver_suggestions: 10
-
-  # How many trade targets to include per report
   max_trade_suggestions: 5
-
-  # Minimum AB or IP to trust a player's recent stats
   min_at_bats_recent: 20
   min_innings_pitched_recent: 8.0
-
-  # Weight for recent performance vs. season-long (0.0–1.0)
-  # Higher = more emphasis on hot streaks
   recency_weight: 0.6
-
-  # Positions to evaluate for start/sit (all by default)
-  roster_positions:
-    hitting: ["C", "1B", "2B", "3B", "SS", "LF", "CF", "RF", "OF", "Util", "BN"]
-    pitching: ["SP", "RP", "P", "BN"]
 
 # ----------------------------------------------------------
 # Report Settings
 # ----------------------------------------------------------
 report:
-  # Include a "why" explanation with each recommendation
   include_explanations: true
-
-  # Language level: "beginner" adds extra context for new players
   audience: "beginner"
-
-  # File naming pattern (date is auto-appended)
-  filename_prefix: "fantasy_daily_report"

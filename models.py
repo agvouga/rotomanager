@@ -1,14 +1,11 @@
 """
 Data models for the Fantasy Baseball ROTO Daily Manager.
-
-These dataclasses provide a clean, typed interface between the API clients,
-the analysis engine, and the report writer.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date
 from enum import Enum
 from typing import Optional
 
@@ -59,6 +56,8 @@ class HittingStats:
     caught_stealing: int = 0
     walks: int = 0
     strikeouts: int = 0
+    hit_by_pitch: int = 0
+    sacrifice_flies: int = 0
     batting_avg: float = 0.0
     on_base_pct: float = 0.0
     slugging_pct: float = 0.0
@@ -66,7 +65,7 @@ class HittingStats:
 
     @property
     def plate_appearances(self) -> int:
-        return self.at_bats + self.walks
+        return self.at_bats + self.walks + self.hit_by_pitch + self.sacrifice_flies
 
 
 @dataclass
@@ -102,23 +101,21 @@ class Player:
     """A fantasy-relevant MLB player."""
     player_id: str
     name: str
-    team: str                                  # MLB team abbreviation
+    team: str
     positions: list[str] = field(default_factory=list)
     player_type: PlayerType = PlayerType.HITTER
     roster_status: RosterStatus = RosterStatus.NOT_AVAILABLE
-    injury_status: Optional[str] = None        # e.g. "IL10", "DTD"
-    ownership_pct: float = 0.0                 # league-wide ownership %
+    injury_status: Optional[str] = None
+    ownership_pct: float = 0.0
 
-    # Stats containers — populated by the analysis engine
     season_hitting: Optional[HittingStats] = None
-    recent_hitting: Optional[HittingStats] = None     # last N days
+    recent_hitting: Optional[HittingStats] = None
     season_pitching: Optional[PitchingStats] = None
     recent_pitching: Optional[PitchingStats] = None
 
-    # Matchup info for today
     opponent_today: Optional[str] = None
     is_playing_today: bool = False
-    probable_starter_against: Optional[str] = None     # opposing SP name
+    probable_starter_against: Optional[str] = None
 
     @property
     def primary_position(self) -> str:
@@ -137,13 +134,12 @@ class GameMatchup:
     game_id: int
     home_team: str
     away_team: str
-    game_time: Optional[datetime] = None
+    game_time: str = ""
     venue: str = ""
     home_probable_pitcher: Optional[str] = None
     away_probable_pitcher: Optional[str] = None
     home_pitcher_era: Optional[float] = None
     away_pitcher_era: Optional[float] = None
-    weather: Optional[str] = None
 
     @property
     def matchup_label(self) -> str:
@@ -154,19 +150,14 @@ class GameMatchup:
 
 @dataclass
 class Recommendation:
-    """A single actionable suggestion for the fantasy manager."""
+    """A single actionable suggestion."""
     rec_type: RecommendationType
     player: Player
     urgency: UrgencyLevel = UrgencyLevel.MEDIUM
-    headline: str = ""                         # one-line summary
-    explanation: str = ""                      # beginner-friendly reasoning
+    headline: str = ""
+    explanation: str = ""
     category_impact: dict[str, str] = field(default_factory=dict)
-    # e.g. {"HR": "+2 projected this week", "AVG": "neutral"}
-
-    # For trades / drops, the other side of the transaction
-    paired_player: Optional[Player] = None     # drop candidate, trade partner, etc.
-
-    # Composite score used for ranking recommendations
+    paired_player: Optional[Player] = None
     score: float = 0.0
 
 
@@ -174,35 +165,24 @@ class Recommendation:
 class StartSitDecision:
     """Start or sit recommendation for a rostered player today."""
     player: Player
-    decision: str                              # "START" or "SIT"
-    confidence: str                            # "High", "Medium", "Low"
-    reason: str                                # e.g. "Facing lefty-heavy lineup"
+    decision: str               # "START" or "SIT"
+    confidence: str             # "High", "Medium", "Low"
+    reason: str
     opponent: str = ""
-    matchup_score: float = 0.0                 # 0–100 favorability
+    matchup_score: float = 0.0
 
 
 # ── Daily Report ────────────────────────────────────────────────────────
 
 @dataclass
 class DailyReport:
-    """The complete daily output — everything the report writer needs."""
+    """The complete daily output."""
     report_date: date
     league_name: str = ""
-
-    # Today's schedule
     games_today: list[GameMatchup] = field(default_factory=list)
-
-    # Roster snapshot
     my_roster: list[Player] = field(default_factory=list)
-
-    # Recommendations
     waiver_adds: list[Recommendation] = field(default_factory=list)
     trade_targets: list[Recommendation] = field(default_factory=list)
     start_sit: list[StartSitDecision] = field(default_factory=list)
-
-    # Summary blurb for the top of the report
     executive_summary: str = ""
-
-    # Category standings snapshot (position in each ROTO category)
     category_standings: dict[str, int] = field(default_factory=dict)
-    # e.g. {"HR": 3, "ERA": 7, ...} meaning 3rd in HR, 7th in ERA

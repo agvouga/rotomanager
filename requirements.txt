@@ -5,20 +5,12 @@ yahoo-fantasy-api>=0.6.0
 # MLB Stats
 MLB-StatsAPI>=1.7.0
 
-# Google Drive
-google-api-python-client>=2.100.0
-google-auth>=2.23.0
-google-auth-oauthlib>=1.1.0
-
 # Data & analysis
 pandas>=2.1.0
 numpy>=1.25.0
 
 # Config
 pyyaml>=6.0
-
-# Scheduling (optional, for daemon mode)
-schedule>=1.2.0
 
 # HTTP
 requests>=2.31.0

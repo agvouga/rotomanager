@@ -1,17 +1,16 @@
 """
 MLB Stats API client.
 
-Uses the free, public MLB Stats API (via the statsapi Python package) to pull:
+Uses the free, public MLB Stats API (statsapi package) to pull:
   - Today's game schedule with probable pitchers
   - Player season and recent statistics
-  - Team information and rosters
+  - Team info
 
 Docs: https://github.com/toddrob99/MLB-StatsAPI
 """
 
 from __future__ import annotations
 
-from datetime import date
 from typing import Optional
 
 import statsapi
@@ -20,10 +19,9 @@ from models import (
     GameMatchup,
     HittingStats,
     PitchingStats,
-    Player,
     PlayerType,
 )
-from utils import log, today_str, days_ago_str, safe_divide
+from utils import log, today_str, days_ago_str
 
 
 class MLBClient:
@@ -32,12 +30,7 @@ class MLBClient:
     # ── Schedule ────────────────────────────────────────────────────────
 
     def get_todays_games(self, game_date: Optional[str] = None) -> list[GameMatchup]:
-        """
-        Return every MLB game scheduled for today (or the given date).
-
-        Each GameMatchup includes teams, venue, game time, and probable
-        starting pitchers with their season ERA.
-        """
+        """Return every MLB game scheduled for the given date."""
         date_str = game_date or today_str()
         log.info(f"Fetching MLB schedule for {date_str}")
 
@@ -53,17 +46,17 @@ class MLBClient:
                 game_id=g.get("game_id", 0),
                 home_team=g.get("home_name", ""),
                 away_team=g.get("away_name", ""),
+                game_time=g.get("game_datetime", ""),
                 venue=g.get("venue_name", ""),
                 home_probable_pitcher=g.get("home_probable_pitcher", ""),
                 away_probable_pitcher=g.get("away_probable_pitcher", ""),
             )
 
-            # Fetch probable pitcher ERAs when available
+            # Look up probable pitcher ERAs
             for side in ("home", "away"):
-                pitcher_name = g.get(f"{side}_probable_pitcher", "")
-                pitcher_id = g.get(f"{side}_pitcher_id")  # may not exist
-                if pitcher_id:
-                    era = self._get_pitcher_era(pitcher_id)
+                pid = g.get(f"{side}_pitcher_id")
+                if pid:
+                    era = self._get_pitcher_era(pid)
                     if side == "home":
                         matchup.home_pitcher_era = era
                     else:
@@ -79,21 +72,14 @@ class MLBClient:
     def get_player_season_stats(
         self, player_name: str, player_type: PlayerType
     ) -> Optional[HittingStats | PitchingStats]:
-        """
-        Look up a player by name and return their current-season stats.
-
-        Falls back gracefully if the player isn't found or has no stats.
-        """
+        """Look up a player by name and return current-season stats."""
         player_id = self._lookup_player_id(player_name)
         if not player_id:
-            log.debug(f"Could not find MLB ID for '{player_name}'")
             return None
 
+        group = "hitting" if player_type == PlayerType.HITTER else "pitching"
         try:
-            raw = statsapi.player_stat_data(
-                player_id, group="hitting" if player_type == PlayerType.HITTER else "pitching",
-                type="season",
-            )
+            raw = statsapi.player_stat_data(player_id, group=group, type="season")
         except Exception as exc:
             log.debug(f"Stats lookup failed for {player_name}: {exc}")
             return None
@@ -103,34 +89,22 @@ class MLBClient:
             return None
 
         s = stats_list[0].get("stats", {})
-
-        if player_type == PlayerType.HITTER:
-            return self._parse_hitting(s)
-        else:
-            return self._parse_pitching(s)
+        return self._parse_hitting(s) if player_type == PlayerType.HITTER else self._parse_pitching(s)
 
     def get_player_recent_stats(
-        self,
-        player_name: str,
-        player_type: PlayerType,
-        days: int = 14,
+        self, player_name: str, player_type: PlayerType, days: int = 14,
     ) -> Optional[HittingStats | PitchingStats]:
-        """
-        Pull a player's stats over the last N days using the 'lastXdays'
-        stat type from the MLB API.
-        """
+        """Pull a player's stats over the last N days."""
         player_id = self._lookup_player_id(player_name)
         if not player_id:
             return None
 
-        # The MLB API supports lastXdays as a game-log filter
         group = "hitting" if player_type == PlayerType.HITTER else "pitching"
+        start = days_ago_str(days)
+        end = today_str()
 
         try:
-            # Use game log and aggregate manually for the date range
-            start = days_ago_str(days)
-            end = today_str()
-            game_log = statsapi.player_stat_data(
+            raw = statsapi.player_stat_data(
                 player_id, group=group, type="byDateRange",
                 params={"startDate": start, "endDate": end},
             )
@@ -138,20 +112,16 @@ class MLBClient:
             log.debug(f"Recent stats lookup failed for {player_name}: {exc}")
             return None
 
-        stats_list = game_log.get("stats", [])
+        stats_list = raw.get("stats", [])
         if not stats_list:
             return None
 
         s = stats_list[0].get("stats", {})
-        if player_type == PlayerType.HITTER:
-            return self._parse_hitting(s)
-        else:
-            return self._parse_pitching(s)
+        return self._parse_hitting(s) if player_type == PlayerType.HITTER else self._parse_pitching(s)
 
-    # ── Helpers ─────────────────────────────────────────────────────────
+    # ── Internal Helpers ────────────────────────────────────────────────
 
     def _lookup_player_id(self, name: str) -> Optional[int]:
-        """Resolve a player name to their MLB person ID."""
         try:
             results = statsapi.lookup_player(name)
             if results:
@@ -161,33 +131,19 @@ class MLBClient:
         return None
 
     def _get_pitcher_era(self, pitcher_id: int) -> Optional[float]:
-        """Get a pitcher's season ERA by their ID."""
         try:
-            data = statsapi.player_stat_data(
-                pitcher_id, group="pitching", type="season"
-            )
+            data = statsapi.player_stat_data(pitcher_id, group="pitching", type="season")
             stats_list = data.get("stats", [])
             if stats_list:
-                era_str = stats_list[0].get("stats", {}).get("era", "0.00")
-                return float(era_str)
+                return float(stats_list[0].get("stats", {}).get("era", "0.00"))
         except Exception:
             pass
         return None
 
     @staticmethod
     def _parse_hitting(s: dict) -> HittingStats:
-        """Parse a raw stats dict into a HittingStats dataclass."""
-        def _int(key: str) -> int:
-            try:
-                return int(s.get(key, 0))
-            except (ValueError, TypeError):
-                return 0
-
-        def _float(key: str) -> float:
-            try:
-                return float(s.get(key, 0.0))
-            except (ValueError, TypeError):
-                return 0.0
+        def _int(k): return int(s.get(k, 0) or 0)
+        def _float(k): return float(s.get(k, 0.0) or 0.0)
 
         return HittingStats(
             games=_int("gamesPlayed"),
@@ -202,6 +158,8 @@ class MLBClient:
             caught_stealing=_int("caughtStealing"),
             walks=_int("baseOnBalls"),
             strikeouts=_int("strikeOuts"),
+            hit_by_pitch=_int("hitByPitch"),
+            sacrifice_flies=_int("sacFlies"),
             batting_avg=_float("avg"),
             on_base_pct=_float("obp"),
             slugging_pct=_float("slg"),
@@ -210,18 +168,8 @@ class MLBClient:
 
     @staticmethod
     def _parse_pitching(s: dict) -> PitchingStats:
-        """Parse a raw stats dict into a PitchingStats dataclass."""
-        def _int(key: str) -> int:
-            try:
-                return int(s.get(key, 0))
-            except (ValueError, TypeError):
-                return 0
-
-        def _float(key: str) -> float:
-            try:
-                return float(s.get(key, 0.0))
-            except (ValueError, TypeError):
-                return 0.0
+        def _int(k): return int(s.get(k, 0) or 0)
+        def _float(k): return float(s.get(k, 0.0) or 0.0)
 
         return PitchingStats(
             games=_int("gamesPlayed"),
@@ -244,18 +192,13 @@ class MLBClient:
         )
 
     def get_team_abbreviation_map(self) -> dict[str, str]:
-        """
-        Return a mapping of full team names → standard abbreviations.
-        Useful for matching Yahoo player teams to MLB schedule teams.
-        """
+        """Map full team names → abbreviations for cross-API matching."""
         try:
             teams = statsapi.get("teams", {"sportIds": 1})
             mapping = {}
             for t in teams.get("teams", []):
                 mapping[t["name"]] = t.get("abbreviation", t["name"])
-                # Also map short name for fuzzy matching
                 mapping[t.get("teamName", "")] = t.get("abbreviation", "")
             return mapping
-        except Exception as exc:
-            log.warning(f"Failed to build team abbreviation map: {exc}")
+        except Exception:
             return {}
