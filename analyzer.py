@@ -1,20 +1,17 @@
 """
 ROTO Analysis Engine (6×6).
 
-Produces ranked recommendations for waivers, trades, and start/sit
-decisions based on your league's categories:
+Hitting:  R, HR, RBI, SB, OBP, OPS
+Pitching: W, SV, K, HLD, ERA, WHIP
 
-  Hitting:  R, HR, RBI, SB, OBP, OPS
-  Pitching: W, SV, K, HLD, ERA, WHIP
-
-Key strategy concepts built in:
-  - Identify your weakest categories and target players who improve them.
-  - Two-category contributors (e.g. a hitter with SB + OBP) rank higher.
-  - Holds league → relievers with HLD upside are real assets, not afterthoughts.
-  - OBP + OPS league → patient hitters (high walk rate) are more valuable
-    than free-swingers with comparable AVG.
-  - Recency weighting surfaces hot streaks for actionable daily moves.
-  - Beginner-friendly: prefer high-floor everyday players over volatile upside.
+Fixes addressed in this version:
+  - Waivers: Always produces recommendations when free agents have stats.
+    Handles empty bench spots (no drop needed). Lowered score thresholds.
+  - Start/Sit: Only recommends SIT when there's a bench alternative who
+    can fill the position. An empty lineup slot is always worse than a
+    bad matchup.
+  - Trades: Works at mid-pack rankings by looking at relative strength
+    across your own categories rather than requiring extreme top/bottom.
 """
 
 from __future__ import annotations
@@ -82,12 +79,10 @@ def score_player(
     config: dict,
 ) -> float:
     """
-    Composite score: how much does this player address your weakest categories?
+    Composite score: how much does this player produce across your ROTO
+    categories, weighted by how badly you need each one?
 
-    Special handling for your 6×6 format:
-      - OBP/OPS: patient hitters (high BB rate) get a bonus.
-      - HLD: middle relievers with holds upside are scored properly.
-      - SV+HLD: a reliever contributing to both is very valuable.
+    Returns a score >= 0. A player with ANY positive stats will score > 0.
     """
     recency_weight = config.get("analysis", {}).get("recency_weight", 0.6)
     season_weight = 1.0 - recency_weight
@@ -104,13 +99,16 @@ def score_player(
         if blended == 0:
             continue
 
-        # Normalize to a ~0–1 contribution scale depending on stat type
         contribution = _normalize_stat(stat, blended, player)
 
-        # Weight by how badly you need this category
-        score += contribution * need.need_score
+        # Weight by need — but give a baseline even for categories you're
+        # winning so that productive players always score above zero.
+        # need_score ranges 0–1; we add a floor of 0.2 so strong categories
+        # still count for something.
+        weight = max(need.need_score, 0.2)
+        score += contribution * weight
 
-        if contribution > 0.3:
+        if contribution > 0.2:  # lowered from 0.3
             categories_helped += 1
 
     # Multi-category bonus
@@ -121,23 +119,22 @@ def score_player(
     elif categories_helped >= 2:
         score *= 1.10
 
-    # ── OBP/OPS league bonus: reward plate discipline ───────────────
+    # OBP/OPS league bonus: reward plate discipline
     if player.player_type == PlayerType.HITTER and player.season_hitting:
         h = player.season_hitting
         if h.plate_appearances > 0:
             walk_rate = h.walks / h.plate_appearances
-            if walk_rate >= 0.12:       # elite walk rate
+            if walk_rate >= 0.12:
                 score *= 1.10
-            elif walk_rate >= 0.09:     # above-average
+            elif walk_rate >= 0.09:
                 score *= 1.05
 
-    # ── Holds league bonus: value setup relievers ───────────────────
+    # Holds league bonus: value setup relievers
     if player.player_type == PlayerType.PITCHER and player.season_pitching:
         p = player.season_pitching
         if p.holds >= 5 and p.saves >= 3:
-            # Dual SV+HLD contributor — rare and very valuable in your format
             score *= 1.15
-        elif p.holds >= 5:
+        elif p.holds >= 3:
             score *= 1.05
 
     # Penalties & bonuses
@@ -157,34 +154,32 @@ def _normalize_stat(stat: str, value: float, player: Player) -> float:
 
     # Rate stats
     if stat == "OBP":
-        return value / 0.400           # .400 OBP ≈ elite ceiling
+        return value / 0.400
     if stat == "OPS":
-        return value / 1.000           # 1.000 OPS ≈ elite ceiling
+        return value / 1.000
     if stat == "AVG":
         return value / 0.350
     if stat == "SLG":
         return value / 0.600
     if stat == "ERA":
-        return max(0, (5.0 - value) / 5.0)   # lower is better
+        return max(0, (5.0 - value) / 5.0)
     if stat == "WHIP":
         return max(0, (1.8 - value) / 1.8)
 
-    # Counting stats: convert to per-game rate, then normalize
-    games = 1
-    if player.player_type == PlayerType.HITTER and player.season_hitting:
-        games = max(player.season_hitting.games, 1)
-    elif player.player_type == PlayerType.PITCHER and player.season_pitching:
-        games = max(player.season_pitching.games, 1)
-
-    per_game = value / games
-
-    ceilings = {
-        "R": 0.7, "HR": 0.25, "RBI": 0.8, "SB": 0.20,
-        "W": 0.20, "K": 7.0, "SV": 0.35, "HLD": 0.35,
-        "H": 1.2, "BB": 0.5, "QS": 0.20,
+    # Counting stats: use raw total (not per-game) for season-length
+    # comparison, then normalize against reasonable season totals.
+    # This avoids the per-game division that crushes scores for players
+    # with many games played.
+    season_ceilings = {
+        "R": 100, "HR": 40, "RBI": 110, "SB": 40,
+        "W": 15, "K": 220, "SV": 35, "HLD": 30,
+        "H": 180, "BB": 80, "QS": 20,
     }
-    ceiling = ceilings.get(stat, 1.0)
-    return min(per_game / ceiling, 1.5)
+    ceiling = season_ceilings.get(stat)
+    if ceiling:
+        return min(value / ceiling, 1.5)
+
+    return min(value, 1.5)
 
 
 # ── Waiver Wire ─────────────────────────────────────────────────────────
@@ -195,30 +190,91 @@ def find_waiver_adds(
     needs: list[CategoryNeed],
     config: dict,
 ) -> list[Recommendation]:
+    """
+    Rank free agents and always return the top N suggestions as long as
+    they have any stats at all.
+
+    Handles empty bench spots: if you have open roster spots, no drop
+    is needed. Otherwise pairs each add with the weakest bench player.
+    """
     analysis_cfg = config.get("analysis", {})
-    min_ownership = analysis_cfg.get("min_ownership_pct", 5)
+    min_ownership = analysis_cfg.get("min_ownership_pct", 0)  # default to 0 so we don't filter too aggressively
     max_suggestions = analysis_cfg.get("max_waiver_suggestions", 10)
 
-    viable = [fa for fa in free_agents if fa.ownership_pct >= min_ownership and not fa.is_injured]
+    # Filter: not injured, has at least some stats to evaluate
+    viable = []
+    for fa in free_agents:
+        if fa.is_injured:
+            continue
+        if fa.ownership_pct < min_ownership:
+            continue
+        # Must have SOME stats to score
+        has_stats = (
+            (fa.season_hitting is not None and fa.season_hitting.games > 0) or
+            (fa.season_pitching is not None and fa.season_pitching.games > 0) or
+            (fa.recent_hitting is not None and fa.recent_hitting.games > 0) or
+            (fa.recent_pitching is not None and fa.recent_pitching.games > 0)
+        )
+        if has_stats:
+            viable.append(fa)
 
+    log.info(f"Waiver evaluation: {len(viable)} viable free agents (of {len(free_agents)} total)")
+
+    # Score each free agent
     scored = [(fa, score_player(fa, needs, config)) for fa in viable]
     scored.sort(key=lambda x: x[1], reverse=True)
 
-    # Drop candidates: weakest bench players
-    bench = [p for p in my_roster if p.roster_status == RosterStatus.BENCH]
+    # Count open roster spots (bench slots not occupied)
+    bench_capacity = config.get("roster_positions", {}).get("bench", 4)
+    bench_players = [p for p in my_roster if p.roster_status == RosterStatus.BENCH]
+    open_spots = max(0, bench_capacity - len(bench_players))
+
+    log.info(f"Roster: {len(bench_players)} bench players, {open_spots} open spots")
+
+    # Score bench players for drop candidates (weakest first)
     bench_scored = sorted(
-        [(p, score_player(p, needs, config)) for p in bench],
+        [(p, score_player(p, needs, config)) for p in bench_players],
         key=lambda x: x[1],
     )
 
     recommendations = []
+    drops_used = set()  # don't suggest dropping the same player twice
+
     for fa, fa_score in scored[:max_suggestions]:
-        # Match drop candidate by player type
-        drops = [p for p, s in bench_scored if p.player_type == fa.player_type]
-        drop_player = drops[0] if drops else None
+        if fa_score <= 0:
+            continue
+
+        drop_player = None
+
+        if open_spots > 0:
+            # Free slot available — just add, no drop needed
+            open_spots -= 1
+        else:
+            # Find the weakest bench player of same type not already suggested
+            for bp, bp_score in bench_scored:
+                if bp.player_id in drops_used:
+                    continue
+                if bp.player_type == fa.player_type and fa_score > bp_score:
+                    drop_player = bp
+                    drops_used.add(bp.player_id)
+                    break
+
+            # If no same-type drop, try any bench player
+            if drop_player is None:
+                for bp, bp_score in bench_scored:
+                    if bp.player_id in drops_used:
+                        continue
+                    if fa_score > bp_score:
+                        drop_player = bp
+                        drops_used.add(bp.player_id)
+                        break
+
+            # If the free agent doesn't beat ANY bench player, skip
+            if drop_player is None and open_spots <= 0:
+                continue
 
         impact = _describe_category_impact(fa, needs)
-        explanation = _build_waiver_explanation(fa, drop_player, needs, config)
+        explanation = _build_waiver_explanation(fa, drop_player, needs, config, open_spots_remain=(drop_player is None))
 
         recommendations.append(Recommendation(
             rec_type=RecommendationType.WAIVER_ADD,
@@ -231,6 +287,7 @@ def find_waiver_adds(
             score=fa_score,
         ))
 
+    log.info(f"Waiver recommendations generated: {len(recommendations)}")
     return recommendations
 
 
@@ -241,45 +298,64 @@ def find_trade_targets(
     needs: list[CategoryNeed],
     config: dict,
 ) -> list[Recommendation]:
+    """
+    Find "sell high" candidates: players producing heavily in categories
+    you're relatively strong in, who could be traded for help in weaker areas.
+
+    Uses relative comparison across YOUR categories rather than requiring
+    extreme top-3/bottom-3 splits, so it works at mid-pack standings too.
+    """
     max_suggestions = config.get("analysis", {}).get("max_trade_suggestions", 5)
 
-    strong_cats = [n for n in needs if n.need_score < 0.3]
-    weak_cats = [n for n in needs if n.need_score > 0.6]
-
-    if not strong_cats or not weak_cats:
+    if len(needs) < 4:
         return []
+
+    # Split into stronger half and weaker half of YOUR categories
+    midpoint = len(needs) // 2
+    weak_cats = needs[:midpoint]    # sorted by need_score descending, so top = weakest
+    strong_cats = needs[midpoint:]  # bottom = strongest
 
     candidates = []
     for player in my_roster:
         if player.roster_status == RosterStatus.INJURED:
             continue
+        if player.roster_status == RosterStatus.BENCH:
+            continue  # bench players aren't trade chips
 
-        strong_val = sum(get_stat_value(player, c.stat, "season") for c in strong_cats)
-        weak_val = sum(get_stat_value(player, c.stat, "season") for c in weak_cats)
+        # How much does this player contribute to your strong categories?
+        strong_val = 0.0
+        weak_val = 0.0
+        for cat in strong_cats:
+            v = get_stat_value(player, cat.stat, "season")
+            strong_val += _normalize_stat(cat.stat, v, player) if v > 0 else 0
+        for cat in weak_cats:
+            v = get_stat_value(player, cat.stat, "season")
+            weak_val += _normalize_stat(cat.stat, v, player) if v > 0 else 0
 
-        if strong_val > 0 and weak_val == 0:
-            candidates.append((player, strong_val))
+        # Good trade chip = high production in strong cats, low in weak cats
+        if strong_val > 0.3 and (weak_val < 0.15 or strong_val > weak_val * 2):
+            candidates.append((player, strong_val, weak_val))
 
     candidates.sort(key=lambda x: x[1], reverse=True)
 
     recs = []
-    for player, surplus in candidates[:max_suggestions]:
+    for player, strong_v, weak_v in candidates[:max_suggestions]:
         weak_names = ", ".join(c.name for c in weak_cats[:3])
         strong_names = ", ".join(c.name for c in strong_cats[:2])
 
         explanation = (
             f"{player.name} is producing most in {strong_names}, where you're "
-            f"already near the top. Trade them to a team that needs those stats "
+            f"relatively strong. Trade them to a team that needs those stats "
             f"and target a return that helps your {weak_names}."
         )
 
         recs.append(Recommendation(
             rec_type=RecommendationType.TRADE_AWAY,
             player=player,
-            urgency=UrgencyLevel.LOW,
+            urgency=UrgencyLevel.MEDIUM if strong_v > 0.6 else UrgencyLevel.LOW,
             headline=f"Sell high: {player.name} ({player.primary_position})",
             explanation=explanation,
-            score=surplus,
+            score=strong_v,
         ))
 
     return recs
@@ -293,12 +369,20 @@ def make_start_sit_decisions(
     needs: list[CategoryNeed],
     config: dict,
 ) -> list[StartSitDecision]:
+    """
+    Start/sit decisions with a critical rule: NEVER recommend sitting a
+    player if there's no bench alternative who can fill that roster slot.
+    An empty lineup spot always scores zero, which is worse than any
+    bad matchup.
+    """
     team_game: dict[str, GameMatchup] = {}
     for game in games:
         team_game[game.home_team] = game
         team_game[game.away_team] = game
 
-    decisions = []
+    # First pass: score every player's matchup
+    player_matchups: list[tuple[Player, GameMatchup | None, float]] = []
+
     for player in roster:
         if player.roster_status == RosterStatus.INJURED:
             continue
@@ -306,40 +390,117 @@ def make_start_sit_decisions(
         game = _find_game(player, team_game)
 
         if game is None:
-            decisions.append(StartSitDecision(
-                player=player,
-                decision="SIT",
-                confidence="High",
-                reason="Team has no game scheduled today.",
-                matchup_score=0,
-            ))
+            player_matchups.append((player, None, 0.0))
+        else:
+            player.is_playing_today = True
+            player.opponent_today = _get_opponent(player, game)
+            ms = _evaluate_matchup(player, game, needs)
+            player_matchups.append((player, game, ms))
+
+    # Identify bench players available as substitutes
+    bench_players = [
+        (p, g, ms) for p, g, ms in player_matchups
+        if p.roster_status == RosterStatus.BENCH and g is not None
+    ]
+
+    # Build the position → bench alternatives map
+    def _positions_for(player: Player) -> set[str]:
+        """All positions this player is eligible for."""
+        pos = set(player.positions)
+        # OF covers LF/CF/RF and vice versa
+        if pos & {"LF", "CF", "RF", "OF"}:
+            pos.add("OF")
+        pos.add("Util")
+        return pos
+
+    decisions = []
+
+    for player, game, ms in player_matchups:
+        if player.roster_status == RosterStatus.BENCH:
+            # Bench players: just note their matchup for context
+            if game:
+                reason = _build_start_sit_reason(player, game, ms)
+                decisions.append(StartSitDecision(
+                    player=player,
+                    decision="BENCH",
+                    confidence="—",
+                    reason=f"On bench. {reason}",
+                    opponent=player.opponent_today or "",
+                    matchup_score=ms,
+                ))
             continue
 
-        player.is_playing_today = True
-        opponent = _get_opponent(player, game)
-        player.opponent_today = opponent
+        # Active roster player
+        if game is None:
+            # No game today — but only flag as SIT if a bench player could
+            # take this slot
+            can_replace = any(
+                _positions_for(bp) & _positions_for(player)
+                for bp, bg, bms in bench_players
+            )
+            if can_replace:
+                decisions.append(StartSitDecision(
+                    player=player,
+                    decision="SIT",
+                    confidence="High",
+                    reason="No game today. A bench player can fill this slot.",
+                    matchup_score=0,
+                ))
+            else:
+                decisions.append(StartSitDecision(
+                    player=player,
+                    decision="START",
+                    confidence="—",
+                    reason="No game today, but no bench alternative for this position.",
+                    matchup_score=0,
+                ))
+            continue
 
-        ms = _evaluate_matchup(player, game, needs)
-
+        # Has a game — evaluate matchup
         if ms >= 65:
-            decision, confidence = "START", ("High" if ms >= 80 else "Medium")
+            decision = "START"
+            confidence = "High" if ms >= 80 else "Medium"
+            reason = _build_start_sit_reason(player, game, ms)
         elif ms >= 45:
-            decision, confidence = "START", "Low"
+            decision = "START"
+            confidence = "Low"
+            reason = _build_start_sit_reason(player, game, ms)
         else:
-            decision, confidence = "SIT", ("High" if ms < 25 else "Medium")
-
-        reason = _build_start_sit_reason(player, game, ms)
+            # Bad matchup — but can we actually sit them?
+            better_bench = [
+                (bp, bms) for bp, bg, bms in bench_players
+                if _positions_for(bp) & _positions_for(player) and bms > ms
+            ]
+            if better_bench:
+                best_alt, best_ms = max(better_bench, key=lambda x: x[1])
+                decision = "SIT"
+                confidence = "High" if ms < 25 else "Medium"
+                reason = (
+                    _build_start_sit_reason(player, game, ms) +
+                    f" Consider starting {best_alt.name} instead "
+                    f"(matchup score {best_ms:.0f} vs {ms:.0f})."
+                )
+            else:
+                # No better alternative — start them despite the bad matchup
+                decision = "START"
+                confidence = "Low"
+                reason = (
+                    _build_start_sit_reason(player, game, ms) +
+                    " Tough matchup, but no better bench option at this position."
+                )
 
         decisions.append(StartSitDecision(
             player=player,
             decision=decision,
             confidence=confidence,
             reason=reason,
-            opponent=opponent,
+            opponent=player.opponent_today or "",
             matchup_score=ms,
         ))
 
-    decisions.sort(key=lambda d: (0 if d.decision == "START" else 1, -d.matchup_score))
+    # Sort: starters first, then sits, then bench notes
+    order = {"START": 0, "SIT": 1, "BENCH": 2}
+    decisions.sort(key=lambda d: (order.get(d.decision, 3), -d.matchup_score))
     return decisions
 
 
@@ -350,9 +511,13 @@ def generate_executive_summary(report: DailyReport, config: dict) -> str:
 
     n_games = len(report.games_today)
     active = sum(1 for d in report.start_sit if d.decision == "START")
-    lines.append(
-        f"**{n_games} MLB games today.** You have **{active} players** in action."
-    )
+    lines.append(f"**{n_games} MLB games today.** You have **{active} players** to start.")
+
+    if report.open_roster_spots > 0:
+        lines.append(
+            f"\n**You have {report.open_roster_spots} open roster spot(s)!** "
+            f"Pick up a free agent — there's no reason to leave spots empty."
+        )
 
     if report.waiver_adds:
         top = report.waiver_adds[0]
@@ -364,10 +529,14 @@ def generate_executive_summary(report: DailyReport, config: dict) -> str:
         cats = ", ".join(f"{cat} (#{rank})" for cat, rank in worst)
         lines.append(f"\n**Category watch:** Your weakest areas are {cats}. Today's suggestions target these.")
 
-    sits = [d for d in report.start_sit if d.decision == "SIT" and d.confidence == "High"]
+    sits = [d for d in report.start_sit if d.decision == "SIT"]
     if sits:
         names = ", ".join(d.player.name for d in sits[:3])
         lines.append(f"\n**Bench today:** {names}.")
+
+    n_tomorrow = len(report.games_tomorrow)
+    if n_tomorrow > 0:
+        lines.append(f"\n**Tomorrow:** {n_tomorrow} games on the schedule — waiver claims below target tomorrow's action.")
 
     return "\n".join(lines)
 
@@ -434,6 +603,8 @@ def _build_start_sit_reason(player: Player, game: GameMatchup, ms: float) -> str
                 parts.append(f"Facing {opp_p}{era_s} — favorable matchup.")
             elif ms < 40:
                 parts.append(f"Facing {opp_p}{era_s} — tough matchup.")
+            else:
+                parts.append(f"Facing {opp_p}{era_s}.")
 
         if player.recent_hitting:
             ops = player.recent_hitting.ops
@@ -457,9 +628,9 @@ def _describe_category_impact(player: Player, needs: list[CategoryNeed]) -> dict
     for need in needs:
         val = get_stat_value(player, need.stat, "season")
         if val > 0:
-            if need.need_score > 0.6:
+            if need.need_score > 0.5:
                 impact[need.stat] = "Helps a weak category!"
-            elif need.need_score > 0.3:
+            elif need.need_score > 0.25:
                 impact[need.stat] = "Contributes"
             else:
                 impact[need.stat] = "Nice to have"
@@ -467,21 +638,25 @@ def _describe_category_impact(player: Player, needs: list[CategoryNeed]) -> dict
 
 
 def _build_waiver_explanation(
-    add: Player, drop: Player | None, needs: list[CategoryNeed], config: dict,
+    add: Player, drop: Player | None, needs: list[CategoryNeed],
+    config: dict, open_spots_remain: bool = False,
 ) -> str:
     audience = config.get("report", {}).get("audience", "beginner")
     parts = []
 
-    helping = [n.name for n in needs if get_stat_value(add, n.stat, "season") > 0 and n.need_score > 0.4]
+    if open_spots_remain:
+        parts.append("**You have an open roster spot — no drop needed!**")
+
+    # What categories does this player help?
+    helping = [n.name for n in needs if get_stat_value(add, n.stat, "season") > 0 and n.need_score > 0.25]
     if helping:
-        parts.append(f"{add.name} boosts your {', '.join(helping[:3])} — categories where you're behind.")
+        parts.append(f"{add.name} boosts your {', '.join(helping[:4])}.")
 
     if add.ownership_pct >= 50:
         parts.append(f"Owned in {add.ownership_pct:.0f}% of leagues (highly valued).")
     elif add.ownership_pct >= 20:
         parts.append(f"Owned in {add.ownership_pct:.0f}% of leagues.")
 
-    # OBP/OPS-specific note
     if add.player_type == PlayerType.HITTER and add.season_hitting:
         h = add.season_hitting
         if h.on_base_pct >= 0.350:
@@ -489,16 +664,15 @@ def _build_waiver_explanation(
         if h.ops >= 0.850:
             parts.append(f"Excellent {h.ops:.3f} OPS.")
 
-    # Holds-specific note
     if add.player_type == PlayerType.PITCHER and add.season_pitching:
         p = add.season_pitching
         if p.holds >= 3:
-            parts.append(f"Already has {p.holds} holds — a real asset in your holds league.")
+            parts.append(f"Already has {p.holds} holds — real asset in a holds league.")
         if p.saves >= 3 and p.holds >= 3:
             parts.append("Rare SV+HLD dual contributor.")
 
     if drop:
-        parts.append(f"Consider dropping {drop.name} to make room.")
+        parts.append(f"Drop {drop.name} to make room.")
 
     if audience == "beginner":
         parts.append(
@@ -510,8 +684,8 @@ def _build_waiver_explanation(
 
 
 def _urgency_from_score(score: float) -> UrgencyLevel:
-    if score >= 0.8:
+    if score >= 1.5:
         return UrgencyLevel.HIGH
-    if score >= 0.4:
+    if score >= 0.5:
         return UrgencyLevel.MEDIUM
     return UrgencyLevel.LOW

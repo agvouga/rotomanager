@@ -180,7 +180,9 @@ class DailyReport:
     report_date: date
     league_name: str = ""
     games_today: list[GameMatchup] = field(default_factory=list)
+    games_tomorrow: list[GameMatchup] = field(default_factory=list)
     my_roster: list[Player] = field(default_factory=list)
+    open_roster_spots: int = 0
     waiver_adds: list[Recommendation] = field(default_factory=list)
     trade_targets: list[Recommendation] = field(default_factory=list)
     start_sit: list[StartSitDecision] = field(default_factory=list)

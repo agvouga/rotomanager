@@ -20,9 +20,9 @@ from __future__ import annotations
 
 import argparse
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 
-from models import DailyReport, PlayerType
+from models import DailyReport, PlayerType, RosterStatus
 from utils import load_config, log, today, today_str
 from yahoo_client import YahooClient
 from mlb_client import MLBClient
@@ -62,9 +62,14 @@ def main() -> None:
 
     mlb = MLBClient()
 
-    # ── 2. Today's MLB schedule ─────────────────────────────────────────
-    log.info("Step 2/5: Fetching MLB schedule …")
+    # ── 2. MLB schedule: today (start/sit) + tomorrow (waiver targets) ──
+    log.info("Step 2/5: Fetching MLB schedule (today + tomorrow) …")
     games_today = mlb.get_todays_games(game_date=date_str)
+
+    tomorrow = target_date + timedelta(days=1)
+    tomorrow_str = tomorrow.strftime("%Y-%m-%d")
+    games_tomorrow = mlb.get_todays_games(game_date=tomorrow_str)
+    log.info(f"  Today: {len(games_today)} games | Tomorrow: {len(games_tomorrow)} games")
 
     # ── 3. Roster + free agents from Yahoo ──────────────────────────────
     log.info("Step 3/5: Loading roster and waiver wire …")
@@ -118,12 +123,21 @@ def main() -> None:
     sits = sum(1 for d in start_sit if d.decision == "SIT")
     log.info(f"Results: {len(waiver_adds)} waiver picks, {len(trade_targets)} trade ideas, {starts} starts / {sits} sits")
 
+    # Count open roster spots
+    bench_capacity = config.get("roster_positions", {}).get("bench", 4)
+    bench_count = sum(1 for p in my_roster if p.roster_status == RosterStatus.BENCH)
+    open_spots = max(0, bench_capacity - bench_count)
+    if open_spots > 0:
+        log.info(f"  ⚠ {open_spots} open roster spot(s) detected!")
+
     # ── Build the report ────────────────────────────────────────────────
     report = DailyReport(
         report_date=target_date,
         league_name=yahoo.get_league_name(),
         games_today=games_today,
+        games_tomorrow=games_tomorrow,
         my_roster=my_roster,
+        open_roster_spots=open_spots,
         waiver_adds=waiver_adds,
         trade_targets=trade_targets,
         start_sit=start_sit,

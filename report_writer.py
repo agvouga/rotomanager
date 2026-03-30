@@ -55,9 +55,10 @@ class ReportWriter:
         sections = [
             self._header(report),
             self._summary(report),
-            self._schedule(report),
+            self._schedule_today(report),
             self._start_sit(report),
             self._waivers(report),
+            self._schedule_tomorrow(report),
             self._trades(report),
             self._footer(),
         ]
@@ -84,14 +85,13 @@ class ReportWriter:
             f"---\n"
         )
 
-    def _schedule(self, report: DailyReport) -> str:
+    def _schedule_today(self, report: DailyReport) -> str:
         lines = ["## Today's Games\n"]
 
         if not report.games_today:
             lines.append("No MLB games scheduled today.\n")
             return "\n".join(lines) + "\n---\n"
 
-        # Table header
         lines.append("| Matchup | Away SP | Home SP |")
         lines.append("|---------|---------|---------|")
 
@@ -108,15 +108,15 @@ class ReportWriter:
         return "\n".join(lines) + "\n---\n"
 
     def _start_sit(self, report: DailyReport) -> str:
-        lines = ["## Start / Sit\n"]
+        lines = ["## Start / Sit — Today's Lineup\n"]
 
         if not report.start_sit:
             lines.append("No decisions to make today.\n")
             return "\n".join(lines) + "\n---\n"
 
-        # Group by decision
         starters = [d for d in report.start_sit if d.decision == "START"]
         sitters = [d for d in report.start_sit if d.decision == "SIT"]
+        bench = [d for d in report.start_sit if d.decision == "BENCH"]
 
         if starters:
             lines.append("### Start\n")
@@ -124,14 +124,13 @@ class ReportWriter:
                 icon = self._confidence_icon(d.confidence)
                 lines.append(
                     f"- {icon} **{d.player.name}** "
-                    f"({d.player.primary_position}, {d.player.team}) "
-                    f"— {d.confidence} confidence"
+                    f"({d.player.primary_position}, {d.player.team})"
                 )
                 lines.append(f"  - {d.reason}")
             lines.append("")
 
         if sitters:
-            lines.append("### Sit\n")
+            lines.append("### Sit (bench alternative available)\n")
             for d in sitters:
                 lines.append(
                     f"- **{d.player.name}** "
@@ -141,10 +140,55 @@ class ReportWriter:
                 lines.append(f"  - {d.reason}")
             lines.append("")
 
+        if bench:
+            lines.append("### Bench Players\n")
+            for d in bench:
+                lines.append(
+                    f"- {d.player.name} "
+                    f"({d.player.primary_position}, {d.player.team})"
+                )
+                lines.append(f"  - {d.reason}")
+            lines.append("")
+
+        return "\n".join(lines) + "\n---\n"
+
+    def _schedule_tomorrow(self, report: DailyReport) -> str:
+        """Tomorrow's schedule — context for waiver claims."""
+        from datetime import timedelta
+        tomorrow = report.report_date + timedelta(days=1)
+        d = tomorrow
+        date_label = f"{d.strftime('%A')}, {d.strftime('%B')} {d.day}"
+
+        lines = [f"## Tomorrow's Games ({date_label})\n"]
+        lines.append("*Waiver claims process overnight — target players in action tomorrow.*\n")
+
+        if not report.games_tomorrow:
+            lines.append("No games scheduled tomorrow.\n")
+            return "\n".join(lines) + "\n---\n"
+
+        lines.append("| Matchup | Away SP | Home SP |")
+        lines.append("|---------|---------|---------|")
+
+        for g in report.games_tomorrow:
+            away_sp = g.away_probable_pitcher or "TBD"
+            home_sp = g.home_probable_pitcher or "TBD"
+            if g.away_pitcher_era is not None:
+                away_sp += f" ({g.away_pitcher_era:.2f})"
+            if g.home_pitcher_era is not None:
+                home_sp += f" ({g.home_pitcher_era:.2f})"
+            lines.append(f"| {g.matchup_label} | {away_sp} | {home_sp} |")
+
+        lines.append("")
         return "\n".join(lines) + "\n---\n"
 
     def _waivers(self, report: DailyReport) -> str:
         lines = ["## Waiver Wire Picks\n"]
+
+        if report.open_roster_spots > 0:
+            lines.append(
+                f"⚠️ **You have {report.open_roster_spots} empty roster spot(s).** "
+                f"Pick someone up — an empty slot earns you nothing in any category.\n"
+            )
 
         if not report.waiver_adds:
             lines.append("No waiver moves recommended today. Your roster is solid.\n")
@@ -162,7 +206,7 @@ class ReportWriter:
                 lines.append(f"Category impact: {' · '.join(impact_parts)}\n")
 
             if rec.paired_player:
-                lines.append(f"> **Drop candidate:** {rec.paired_player.name}\n")
+                lines.append(f"> **Drop:** {rec.paired_player.name}\n")
 
             lines.append("")
 
